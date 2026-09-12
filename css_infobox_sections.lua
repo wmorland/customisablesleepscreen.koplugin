@@ -44,6 +44,7 @@ local getDisplayPage     = bookdata.getDisplayPage
 local bg_mod           = require("css_infobox_background")
 local trackBB          = bg_mod.trackBB
 local isCoverExcluded  = bg_mod.isCoverExcluded
+local isBookInfoHidden = bg_mod.isBookInfoHidden
 
 local PluginStore = require("css_settings").plugin()
 
@@ -612,6 +613,7 @@ end
 
 local function buildBookSection(ui, state, book_data, has_ui, total_width, colors, color_config, title_face, subtitle_face, layout)
     if getSetting("SHOW_BOOK") == false then return nil end
+    if isBookInfoHidden(ui, book_data) then return nil end
 
     local book_title, page_now, page_total, avg_time, authors
 
@@ -768,6 +770,7 @@ end
 
 local function buildChapterSection(ui, state, book_data, has_ui, total_width, colors, color_config, title_face, subtitle_face, layout)
     if getSetting("SHOW_CHAP") == false then return nil end
+    if isBookInfoHidden(ui, book_data) then return nil end
 
     local chap_title, c_done, c_tot, pages_left, avg_time
     local current_chap_num, total_chapters
@@ -1055,6 +1058,7 @@ local function buildMessageSection(ui, state, book_data, has_ui, total_width, co
     if getSetting("SHOW_MSG") == false then return nil end
 
     local message_source = getSetting("MESSAGE_SOURCE") or "custom"
+    local book_info_hidden = isBookInfoHidden(ui, book_data)
     local message_text
 
     if message_source == "none" then
@@ -1063,7 +1067,11 @@ local function buildMessageSection(ui, state, book_data, has_ui, total_width, co
         if not G_reader_settings:isTrue(SETTINGS.SHOW_MSG_GLOBAL) then return nil end
         message_text = util.trim(G_reader_settings:readSetting(SETTINGS.MSG_TEXT) or "")
         if message_text ~= "" then
-            if has_ui and ui.bookinfo and ui.bookinfo.expandString then
+            -- KOReader's own message can carry book placeholders (%T, %p, ...), so a
+            -- message using any of them is dropped rather than expanded for a hidden book.
+            if book_info_hidden then
+                if message_text:find("%%") then return nil end
+            elseif has_ui and ui.bookinfo and ui.bookinfo.expandString then
                 message_text = ui.bookinfo:expandString(message_text) or message_text
             end
         else
@@ -1094,6 +1102,8 @@ local function buildMessageSection(ui, state, book_data, has_ui, total_width, co
             message_text = _("No custom quotes found. Add quotes to custom_quotes.lua.")
         end
     elseif message_source == "highlight" then
+        -- Highlights belong to the current book, so they follow its exclusion too.
+        if book_info_hidden then return nil end
         local cover_path = has_ui and ui.document.file or (book_data and book_data.cover_path)
         if cover_path then
             local highlight_data = getRandomHighlight(nil, cover_path)

@@ -21,11 +21,12 @@ local css_settings = require("css_settings")
 local PluginStore  = css_settings.plugin()
 local PresetStore  = css_settings.presets()
 
-local h                = require("css_menu_helpers")
-local getSetting       = h.getSetting
-local createRadioItem  = h.createRadioItem
-local createSpinDialog = h.createSpinDialog
-local buildNumericMenu = h.buildNumericMenu
+local h                       = require("css_menu_helpers")
+local getSetting              = h.getSetting
+local createRadioItem         = h.createRadioItem
+local createFlipNilOrTrueItem = h.createFlipNilOrTrueItem
+local createSpinDialog        = h.createSpinDialog
+local buildNumericMenu        = h.buildNumericMenu
 
 local bg_mod = require("css_infobox_background")
 
@@ -390,6 +391,11 @@ local function buildAdvancedMenu(ui)
                 { text = _("Random image from folder"),           val = "folder"      },
             }),
         },
+        createFlipNilOrTrueItem(
+            _("Also hide book sections when cover is excluded"),
+            _("For any cover-excluded book, also hide the book and chapter sections, its highlights, and any KOReader message using book placeholders - leaving only sections that don't give the book away, such as reading time and battery. Turn this off to hide the cover only."),
+            SETTINGS.EXCLUDED_HIDE_BOOK_INFO
+        ),
     }
 end
 

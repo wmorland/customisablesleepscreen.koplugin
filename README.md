@@ -15,6 +15,7 @@ Originally released as a patch, this project has now been rebuilt as a KOReader 
 - Save and load your own configurations, with 10 built-in presets included
 - Light/dark/monochrome modes (suitable for non-colour e-readers)
 - Background options: book cover (with optional overlay), images from folder, solid colour or transparent
+- Exclude an individual book from the sleep screen: hides its cover, and by default its book, chapter and highlight sections too, leaving only sections that don't give the book away (reading time, battery, messages)
 - Coloured progress bars for percentage stats with option to place inline with text
 - Customise info-box background and text colour
 - Dynamic icons for sections, with 7 icon sets included

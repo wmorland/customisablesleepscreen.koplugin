@@ -452,6 +452,16 @@ msgstr ""
 msgid "Random image from folder"
 msgstr ""
 
+msgid "Also hide book sections when cover is excluded"
+msgstr ""
+
+msgid ""
+"For any cover-excluded book, also hide the book and chapter sections, its "
+"highlights, and any KOReader message using book placeholders - leaving only "
+"sections that don't give the book away, such as reading time and battery. "
+"Turn this off to hide the cover only."
+msgstr ""
+
 msgid "Presets"
 msgstr ""
 

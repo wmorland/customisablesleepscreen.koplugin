@@ -29,6 +29,13 @@ local function isCoverExcluded(ui, book_data)
     return false
 end
 
+-- True when the book's sections (book, chapter, its highlights) should be hidden
+-- too, i.e. the book is cover-excluded and the global opt-out is left enabled.
+local function isBookInfoHidden(ui, book_data)
+    if getSetting("EXCLUDED_HIDE_BOOK_INFO") == false then return false end
+    return isCoverExcluded(ui, book_data)
+end
+
 local _active_blitbuffers = {}
 
 local function trackBB(bb)
@@ -345,5 +352,6 @@ return {
     buildBackgroundWidget = buildBackgroundWidget,
     buildDimmingLayer     = buildDimmingLayer,
     isCoverExcluded       = isCoverExcluded,
+    isBookInfoHidden      = isBookInfoHidden,
     COVER_EXCLUDE_KEY     = COVER_EXCLUDE_KEY,
 }

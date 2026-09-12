@@ -9,21 +9,22 @@ local PluginStore  = css_settings.plugin()
 local PresetStore  = css_settings.presets()
 
 local PRESET_EXCLUDED_KEYS = {
-    TYPE                   = true,
-    PRESETS                = true,
-    SHOW_MSG_GLOBAL        = true,
-    MSG_TEXT               = true,
-    VERSION                = true,
-    LAST_BOOK_STATE        = true,
-    LAST_LOADED_PRESET     = true,
-    CYCLE_INDEX            = true,
-    SHOW_IN_FILEMANAGER    = true,
-    HIDE_PRELOADED_PRESETS = true,
-    DEBUG                  = true,
-    BATT_STAT_TYPE         = true,
-    BATT_MANUAL_RATE       = true,
-    EXPORT_PATH            = true,
-    EXPORT_ENABLED         = true,
+    TYPE                    = true,
+    PRESETS                 = true,
+    SHOW_MSG_GLOBAL         = true,
+    MSG_TEXT                = true,
+    VERSION                 = true,
+    LAST_BOOK_STATE         = true,
+    LAST_LOADED_PRESET      = true,
+    CYCLE_INDEX             = true,
+    SHOW_IN_FILEMANAGER     = true,
+    HIDE_PRELOADED_PRESETS  = true,
+    DEBUG                   = true,
+    BATT_STAT_TYPE          = true,
+    BATT_MANUAL_RATE        = true,
+    EXPORT_PATH             = true,
+    EXPORT_ENABLED          = true,
+    EXCLUDED_HIDE_BOOK_INFO = true,
 }
 
 local function buildPreset(overrides)

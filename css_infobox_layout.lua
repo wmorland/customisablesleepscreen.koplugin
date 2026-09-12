@@ -204,6 +204,18 @@ local function buildInfoBox(ui, state, book_data)
             end
         end
 
+        -- Every section can be hidden (all switched off, or a cover-excluded book
+        -- leaving nothing to show): draw the background alone rather than an empty box.
+        if #built_sections == 0 then
+            local screen_size = Screen:getSize()
+            local bg_widget   = buildBackgroundWidget(ui, book_data)
+            return OverlapGroup:new {
+                dimen = screen_size,
+                bg_widget or HorizontalSpan:new { width = screen_size.w },
+                buildDimmingLayer(),
+            }
+        end
+
         local border_wrap
 
         if layout.gaps_enabled then
