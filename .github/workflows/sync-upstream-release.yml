@@ -1,0 +1,348 @@
+name: Sync upstream release
+
+# Watches the original repository for new releases, replays this fork's own
+# commits on top of the released code, and — if that works cleanly — cuts a
+# matching release here with the same zip layout the install steps expect.
+#
+# GitHub cannot notify one repository about another's releases, so this polls
+# the upstream "latest release" endpoint on a schedule. It is a no-op when the
+# released commit is already part of this fork's history, so running it often
+# costs nothing.
+#
+# Fork commits whose subject starts with "Release v" are treated as version
+# bumps from a previous run and are NOT replayed; this job writes a fresh
+# version bump (and .gitattributes) itself. Keep that convention in mind when
+# committing here: name release commits "Release vX.Y.Z" and nothing else.
+#
+# NOTE: a successful run force-pushes `main`, because rebasing rewrites the
+# fork's commits onto the new upstream base. Anything only in a local clone
+# needs a `git pull --rebase` afterwards.
+
+on:
+  schedule:
+    - cron: "17 7 * * *" # daily, 07:17 UTC
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: "Upstream release tag to rebase onto (blank = latest release)"
+        required: false
+        type: string
+      dry_run:
+        description: "Rebase and validate, but do not push or publish"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: sync-upstream-release
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: pxlflux/customisablesleepscreen.koplugin
+  PLUGIN_DIR: customisablesleepscreen.koplugin
+  ASSET_BASE: customisablesleepscreen
+  REPORT: /tmp/sync-report.md
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up git and upstream remote
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          # --no-tags throughout: upstream's tags must not land in this fork's tag
+          # namespace, or the version check below mistakes them for our releases.
+          git fetch --quiet --no-tags upstream "+refs/heads/*:refs/remotes/upstream/*"
+
+      - name: Resolve upstream release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ inputs.upstream_tag }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-}"
+          if [ -z "$tag" ]; then
+            tag=$(gh api "repos/${UPSTREAM_REPO}/releases/latest" --jq .tag_name)
+          fi
+          echo "Upstream release tag: $tag"
+
+          version="${tag#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::notice::Upstream tag '$tag' is not X.Y.Z; the plugin only parses strict X.Y.Z versions, so there is nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch --quiet --no-tags upstream "refs/tags/${tag}:refs/tags/upstream-${tag}"
+          commit=$(git rev-parse "refs/tags/upstream-${tag}^{commit}")
+          echo "Upstream release commit: $commit"
+
+          if git merge-base --is-ancestor "$commit" HEAD; then
+            echo "::notice::Upstream $tag is already in this fork's history; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          {
+            echo "skip=false"
+            echo "tag=$tag"
+            echo "upstream_version=$version"
+            echo "commit=$commit"
+            echo "old_main=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Collect this fork's commits
+        id: forkcommits
+        if: steps.release.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          base=$(git merge-base HEAD refs/remotes/upstream/main)
+          echo "Shared base with upstream: $(git log -1 --oneline "$base")"
+
+          # Oldest first, merges and previous version bumps excluded.
+          git log --reverse --no-merges --format='%H %s' "${base}..HEAD" \
+            | grep -v -E ' Release v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | cut -d' ' -f1 > /tmp/fork-commits.txt || true
+
+          count=$(wc -l < /tmp/fork-commits.txt | tr -d ' ')
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          if [ "$count" -eq 0 ]; then
+            echo "::warning::No fork commits to replay - this fork carries no changes over upstream."
+          fi
+          while read -r sha; do
+            echo "  will replay $(git log -1 --oneline "$sha")"
+          done < /tmp/fork-commits.txt
+
+      - name: Rebase fork commits onto the release
+        id: rebase
+        if: steps.release.outputs.skip == 'false' && steps.forkcommits.outputs.count != '0'
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          COMMIT: ${{ steps.release.outputs.commit }}
+        run: |
+          set -euo pipefail
+          branch="sync/${TAG}"
+          git checkout -q -B "$branch" "$COMMIT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+          while read -r sha; do
+            subject=$(git log -1 --format=%s "$sha")
+            echo "::group::Applying $(git rev-parse --short "$sha") $subject"
+            if git cherry-pick -x "$sha"; then
+              echo "applied"
+              echo "::endgroup::"
+              continue
+            fi
+
+            conflicts=$(git diff --name-only --diff-filter=U)
+            if [ -z "$conflicts" ]; then
+              # Upstream has since made this change itself: nothing left to apply.
+              echo "already upstream, skipping"
+              git cherry-pick --skip
+              echo "::endgroup::"
+              continue
+            fi
+
+            echo "::endgroup::"
+            {
+              echo "### Rebase onto upstream \`${TAG}\` hit a conflict"
+              echo
+              echo "Fork commit that would not apply: \`$(git rev-parse --short "$sha")\` $subject"
+              echo
+              echo "Conflicting files:"
+              echo '```'
+              echo "$conflicts"
+              echo '```'
+              echo
+              echo "Nothing was pushed to \`main\` and no release was made. To resolve it locally:"
+              echo
+              echo '```bash'
+              echo "git fetch origin && git fetch upstream --tags"
+              echo "git checkout -B sync/${TAG} ${COMMIT}"
+              echo "git cherry-pick $(git rev-parse --short "$sha")   # resolve, then: git cherry-pick --continue"
+              echo '```'
+              echo
+              echo "Once \`main\` is sorted out, release with the four steps in the repo's release notes,"
+              echo "or re-run this workflow manually."
+            } >> "$REPORT"
+            git cherry-pick --abort
+            exit 1
+          done < /tmp/fork-commits.txt
+
+          echo "All fork commits replayed onto $TAG"
+
+      - name: Validate the rebased tree
+        if: steps.rebase.outcome == 'success'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq lua5.1 gettext > /dev/null
+
+          # KOReader runs LuaJIT (5.1 syntax), so load every file with lua5.1
+          # to catch a rebase that merged cleanly but produced invalid Lua.
+          cat > /tmp/syntax-check.lua <<'LUA'
+          local ok = true
+          for _, path in ipairs(arg) do
+            local chunk, err = loadfile(path)
+            if not chunk then
+              io.stderr:write("::error file=" .. path .. "::" .. tostring(err) .. "\n")
+              ok = false
+            end
+          end
+          os.exit(ok and 0 or 1)
+          LUA
+
+          failed=0
+          lua5.1 /tmp/syntax-check.lua ./*.lua || failed=1
+          if ! msgfmt --check-format -o /dev/null l10n/customisablesleepscreen.pot; then
+            echo "::error file=l10n/customisablesleepscreen.pot::Invalid gettext template after rebase"
+            failed=1
+          fi
+
+          if [ "$failed" -ne 0 ]; then
+            {
+              echo "### Rebase applied cleanly but the result does not build"
+              echo
+              echo "The merge produced no conflicts, yet the rebased tree fails validation"
+              echo "(see the job log for the offending file). Nothing was pushed or published."
+            } >> "$REPORT"
+            exit 1
+          fi
+          echo "Lua and gettext validation passed"
+
+      - name: Bump version
+        id: version
+        if: steps.rebase.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_VERSION: ${{ steps.release.outputs.upstream_version }}
+        run: |
+          set -euo pipefail
+          # Track upstream's version; if this fork already released it, take the
+          # next free patch. The plugin's own migration code only parses strict
+          # X.Y.Z, so no suffixes here.
+          IFS=. read -r major minor patch <<< "$UPSTREAM_VERSION"
+          version="$UPSTREAM_VERSION"
+          while git rev-parse -q --verify "refs/tags/v${version}" > /dev/null \
+             || gh release view "v${version}" --repo "${{ github.repository }}" > /dev/null 2>&1; do
+            patch=$((patch + 1))
+            version="${major}.${minor}.${patch}"
+          done
+          echo "New fork version: $version"
+
+          sed -i -E "s/^(    version     = \")[^\"]+(\",)$/\1${version}\2/" _meta.lua
+          grep -q "version     = \"${version}\"," _meta.lua || {
+            echo "::error file=_meta.lua::Could not rewrite the version line"; exit 1; }
+
+          # Keep the packaging rules with the release commit, so dropping old
+          # release commits on the next rebase cannot lose them.
+          printf '%s\n' \
+            '.github        export-ignore' \
+            '.gitignore     export-ignore' \
+            '.gitattributes export-ignore' > .gitattributes
+
+          git add _meta.lua .gitattributes
+          git commit -q -m "Release v${version}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Write release notes
+        id: notes
+        if: steps.rebase.outcome == 'success'
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          COMMIT: ${{ steps.release.outputs.commit }}
+        run: |
+          set -euo pipefail
+          notes=/tmp/release-notes.md
+          {
+            echo "Rebuilt on upstream [${TAG}](https://github.com/${UPSTREAM_REPO}/releases/tag/${TAG}) — see that release for the upstream changes."
+            echo
+            echo "This fork's changes on top:"
+            echo
+            git log --reverse --no-merges --format='- %s' "${COMMIT}..HEAD" \
+              | grep -v -E '^- Release v[0-9]+\.[0-9]+\.[0-9]+$' || true
+            echo
+            echo "Install: download \`${ASSET_BASE}_v${VERSION}.zip\`, extract it, and put the \`${PLUGIN_DIR}\` folder in KOReader's \`plugins\` folder."
+            echo
+            echo "_Rebased and published automatically by [\`sync-upstream-release.yml\`](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})._"
+          } > "$notes"
+          cat "$notes"
+          echo "path=$notes" >> "$GITHUB_OUTPUT"
+
+      - name: Publish
+        id: publish
+        if: steps.rebase.outcome == 'success' && inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          OLD_MAIN: ${{ steps.release.outputs.old_main }}
+        run: |
+          set -euo pipefail
+          git push --force-with-lease="main:${OLD_MAIN}" origin "HEAD:refs/heads/main"
+          git tag -a "v${VERSION}" -m "v${VERSION}"
+          git push origin "refs/tags/v${VERSION}"
+
+          mkdir -p dist
+          zip="dist/${ASSET_BASE}_v${VERSION}.zip"
+          git archive --format=zip --prefix="${PLUGIN_DIR}/" -o "$zip" "v${VERSION}"
+          unzip -l "$zip" | tail -3
+
+          gh release create "v${VERSION}" \
+            --repo "${{ github.repository }}" \
+            --title "v${VERSION}" \
+            --notes-file "${{ steps.notes.outputs.path }}" \
+            "$zip"
+
+      - name: Summarise
+        if: always() && steps.release.outputs.skip == 'false'
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.publish.outcome }}" = "success" ]; then
+            echo "Released [v${VERSION}](https://github.com/${{ github.repository }}/releases/tag/v${VERSION}) on upstream ${TAG}." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "${{ steps.rebase.outcome }}" = "success" ]; then
+            echo "Dry run: rebased onto ${TAG} and validated; would have released v${VERSION}." >> "$GITHUB_STEP_SUMMARY"
+          elif [ -f "$REPORT" ]; then
+            cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Open an issue if the sync failed
+        if: failure() && steps.release.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          body=/tmp/issue.md
+          if [ -f "$REPORT" ]; then cp "$REPORT" "$body"; else
+            echo "### Syncing upstream \`${TAG}\` failed" > "$body"
+            echo >> "$body"
+            echo "The job failed before reaching the rebase; see the log." >> "$body"
+          fi
+          echo >> "$body"
+          echo "Workflow run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> "$body"
+
+          title="Upstream ${TAG}: automatic rebase needs attention"
+          existing=$(gh issue list --repo "${{ github.repository }}" --state open \
+            --search "in:title \"$title\"" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "${{ github.repository }}" --body-file "$body"
+          else
+            gh issue create --repo "${{ github.repository }}" --title "$title" --body-file "$body"
+          fi
