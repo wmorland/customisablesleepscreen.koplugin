@@ -322,8 +322,8 @@ jobs:
             cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Open an issue if the sync failed
-        if: failure() && steps.release.outputs.skip == 'false'
+      - name: Report a failed sync
+        if: failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.release.outputs.tag }}
@@ -331,14 +331,27 @@ jobs:
           set -euo pipefail
           body=/tmp/issue.md
           if [ -f "$REPORT" ]; then cp "$REPORT" "$body"; else
-            echo "### Syncing upstream \`${TAG}\` failed" > "$body"
-            echo >> "$body"
-            echo "The job failed before reaching the rebase; see the log." >> "$body"
+            {
+              echo "### Syncing upstream \`${TAG:-(unresolved)}\` failed"
+              echo
+              echo "The job failed before the rebase stage; see the log for the failing step."
+            } > "$body"
           fi
-          echo >> "$body"
-          echo "Workflow run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> "$body"
+          {
+            echo
+            echo "Workflow run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } >> "$body"
 
-          title="Upstream ${TAG}: automatic rebase needs attention"
+          cat "$body" >> "$GITHUB_STEP_SUMMARY"
+
+          # Issues may be turned off for this repository; the run summary above
+          # plus GitHub's failure email are then the only notification.
+          if [ "$(gh api "repos/${{ github.repository }}" --jq .has_issues)" != "true" ]; then
+            echo "::warning::Issues are disabled for this repository, so no tracking issue was opened - the details are in this run's summary."
+            exit 0
+          fi
+
+          title="Upstream ${TAG:-sync}: automatic rebase needs attention"
           existing=$(gh issue list --repo "${{ github.repository }}" --state open \
             --search "in:title \"$title\"" --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
