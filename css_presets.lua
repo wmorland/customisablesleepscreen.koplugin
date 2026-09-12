@@ -64,6 +64,7 @@ local PRESET_EXCLUDED_KEYS = {
     AUTO_PRESET_SWITCH_END_MIN      = true,
     AUTO_PRESET_SWITCH_DAY_PRESET   = true,
     AUTO_PRESET_SWITCH_NIGHT_PRESET = true,
+    EXCLUDED_HIDE_BOOK_INFO         = true,
 }
 
 -- Built-in preset definitions

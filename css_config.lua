@@ -138,6 +138,7 @@ local USER_CONFIG = {
     BG_SOLID_COLOR           = "#000000",
     BG_STRETCH               = true,
     EXCLUDED_COVER_BG_TYPE   = "transparent",
+    EXCLUDED_HIDE_BOOK_INFO  = true,
     BG_COVER_FILL_COLOR      = "black",
     BG_COVER_ALIGN           = "center",
 
@@ -318,6 +319,7 @@ local SETTINGS = {
     BG_COVER_FILL_COLOR      = "customisable_ss_bg_cover_fill_color",
     BG_COVER_ALIGN           = "customisable_ss_bg_cover_align",
     EXCLUDED_COVER_BG_TYPE   = "customisable_ss_excluded_cover_bg_type",
+    EXCLUDED_HIDE_BOOK_INFO  = "customisable_ss_excluded_hide_book_info",
 
     -- Preset management
     PRESETS                  = "customisable_ss_presets",

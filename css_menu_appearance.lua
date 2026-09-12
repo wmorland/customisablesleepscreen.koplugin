@@ -15,6 +15,7 @@ local bg_mod = require("css_infobox_background")
 local h                        = require("css_menu_helpers")
 local getSetting               = h.getSetting
 local createToggleItem         = h.createToggleItem
+local createFlipNilOrTrueItem  = h.createFlipNilOrTrueItem
 local createRadioItem          = h.createRadioItem
 local createColorMenuItem      = h.createColorMenuItem
 local createResetMenuItem      = h.createResetMenuItem
@@ -1098,6 +1099,11 @@ local function buildBackgroundMenu(ui)
                         { text = _("Random image from folder"),           val = "folder"      },
                     }),
                 },
+                createFlipNilOrTrueItem(
+                    _("Also hide book sections when cover is excluded"),
+                    _("For any cover-excluded book, also hide the book and chapter sections, its highlights, and any KOReader message using book placeholders - leaving only sections that don't give the book away, such as reading time and battery. Turn this off to hide the cover only."),
+                    SETTINGS.EXCLUDED_HIDE_BOOK_INFO
+                ),
             },
         },
     }

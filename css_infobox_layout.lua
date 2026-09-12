@@ -200,6 +200,8 @@ local function buildInfoBox(ui, state, book_data)
             end
         end
 
+        -- Every section can be hidden (all switched off, or a cover-excluded book
+        -- leaving nothing to show): draw the background alone rather than an empty box.
         if #built_sections == 0 then
             local screen_size = Screen:getSize()
             return OverlapGroup:new {
