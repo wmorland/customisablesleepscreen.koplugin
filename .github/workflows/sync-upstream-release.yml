@@ -11,8 +11,9 @@ name: Sync upstream release
 #
 # Fork commits whose subject starts with "Release v" are treated as version
 # bumps from a previous run and are NOT replayed; this job writes a fresh
-# version bump (and .gitattributes) itself. Keep that convention in mind when
-# committing here: name release commits "Release vX.Y.Z" and nothing else.
+# version bump itself when one is needed. Keep that convention in mind when
+# committing here: name release commits "Release vX.Y.Z" and put nothing else
+# in them (packaging rules live in .gitattributes, in an ordinary commit).
 #
 # NOTE: a successful run force-pushes `main`, because rebasing rewrites the
 # fork's commits onto the new upstream base. Anything only in a local clone
@@ -55,6 +56,10 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          # GITHUB_TOKEN may not push commits that touch .github/workflows, and
+          # every rebase rewrites this file's commits. SYNC_TOKEN is a fine-grained
+          # token for this repo with Contents and Workflows read/write.
+          token: ${{ secrets.SYNC_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Set up git and upstream remote
         run: |
@@ -132,11 +137,14 @@ jobs:
         env:
           TAG: ${{ steps.release.outputs.tag }}
           COMMIT: ${{ steps.release.outputs.commit }}
+          OLD_MAIN: ${{ steps.release.outputs.old_main }}
+          UPSTREAM_VERSION: ${{ steps.release.outputs.upstream_version }}
         run: |
           set -euo pipefail
           branch="sync/${TAG}"
           git checkout -q -B "$branch" "$COMMIT"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          fork_commits=$(cat /tmp/fork-commits.txt)
 
           while read -r sha; do
             subject=$(git log -1 --format=%s "$sha")
@@ -157,6 +165,10 @@ jobs:
             fi
 
             echo "::endgroup::"
+            # This commit and every fork commit after it still need replaying.
+            remaining=$(sed -n "/^${sha}\$/,\$p" <<< "$fork_commits" \
+              | xargs -n1 git rev-parse --short | tr '\n' ' ')
+            v="v${UPSTREAM_VERSION}"
             {
               echo "### Rebase onto upstream \`${TAG}\` hit a conflict"
               echo
@@ -167,16 +179,26 @@ jobs:
               echo "$conflicts"
               echo '```'
               echo
-              echo "Nothing was pushed to \`main\` and no release was made. To resolve it locally:"
+              echo "Nothing was pushed to \`main\` and no release was made. To resolve it locally,"
+              echo "replay the remaining fork commits, fixing each conflict and running"
+              echo "\`git cherry-pick --continue\` until the sequence finishes:"
               echo
               echo '```bash'
-              echo "git fetch origin && git fetch upstream --tags"
+              echo "git fetch origin && git fetch --no-tags upstream"
               echo "git checkout -B sync/${TAG} ${COMMIT}"
-              echo "git cherry-pick $(git rev-parse --short "$sha")   # resolve, then: git cherry-pick --continue"
+              echo "git cherry-pick -x ${remaining}"
               echo '```'
               echo
-              echo "Once \`main\` is sorted out, release with the four steps in the repo's release notes,"
-              echo "or re-run this workflow manually."
+              echo "Then publish by hand: once \`main\` contains \`${TAG}\` this workflow skips it."
+              echo "If this fork already has a \`${v}\` release, use the next free patch version"
+              echo "instead, and bump \`_meta.lua\` in a \"Release vX.Y.Z\" commit first."
+              echo
+              echo '```bash'
+              echo "git push --force-with-lease=main:${OLD_MAIN} origin HEAD:refs/heads/main"
+              echo "git tag -a ${v} -m ${v} && git push origin refs/tags/${v}"
+              echo "git archive --format=zip --prefix=${PLUGIN_DIR}/ -o ${ASSET_BASE}_${v}.zip ${v}"
+              echo "gh release create ${v} --title ${v} --notes \"Rebuilt on upstream ${TAG}.\" ${ASSET_BASE}_${v}.zip"
+              echo '```'
             } >> "$REPORT"
             git cherry-pick --abort
             exit 1
@@ -247,15 +269,14 @@ jobs:
           grep -q "version     = \"${version}\"," _meta.lua || {
             echo "::error file=_meta.lua::Could not rewrite the version line"; exit 1; }
 
-          # Keep the packaging rules with the release commit, so dropping old
-          # release commits on the next rebase cannot lose them.
-          printf '%s\n' \
-            '.github        export-ignore' \
-            '.gitignore     export-ignore' \
-            '.gitattributes export-ignore' > .gitattributes
-
-          git add _meta.lua .gitattributes
-          git commit -q -m "Release v${version}"
+          # Upstream usually bumps _meta.lua itself, so there is only something to
+          # commit when this fork had to take a later patch version.
+          git add _meta.lua
+          if git diff --cached --quiet; then
+            echo "_meta.lua already at ${version}; no release commit needed"
+          else
+            git commit -q -m "Release v${version}"
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Write release notes
@@ -290,8 +311,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
           OLD_MAIN: ${{ steps.release.outputs.old_main }}
+          HAS_SYNC_TOKEN: ${{ secrets.SYNC_TOKEN != '' }}
         run: |
           set -euo pipefail
+          if [ "$HAS_SYNC_TOKEN" != "true" ]; then
+            echo "::warning::SYNC_TOKEN is not set; pushing with GITHUB_TOKEN, which GitHub rejects for commits touching .github/workflows."
+          fi
           git push --force-with-lease="main:${OLD_MAIN}" origin "HEAD:refs/heads/main"
           git tag -a "v${VERSION}" -m "v${VERSION}"
           git push origin "refs/tags/v${VERSION}"
